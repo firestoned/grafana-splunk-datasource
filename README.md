@@ -152,14 +152,11 @@ go test ./...     # backend unit tests against an httptest fake Splunk
 
 ## Building a release artifact
 
-Grafana plugins are distributed as a zip of the built `dist/` directory, named after the plugin id. Build, optionally sign, then package:
+Grafana plugins are distributed as a zip of the built `dist/` directory, named after the plugin id:
 
 ```bash
 npm run build           # frontend → dist/
 mage -v buildAll        # backend  → dist/gpx_splunk_*
-# Optional: sign so it can be loaded without
-# GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS
-npm run sign
 npm run package         # → firestoned-splunk-datasource-<version>.zip
 ```
 
@@ -167,9 +164,79 @@ The zip contains a single top-level directory `firestoned-splunk-datasource/` �
 
 ## Installing the plugin
 
-Three supported methods. Pick whichever matches your environment.
+Releases are **unsigned** — this plugin targets OSS / on-prem deployments. Grafana refuses to load unsigned plugins by default, so every install method below has two parts:
 
-### 1. Manual install (any Grafana, including Docker)
+1. Allow the unsigned plugin to load (one-time per Grafana instance).
+2. Get the plugin zip onto disk.
+
+### Step 1 — Allow the unsigned plugin to load
+
+The plugin id is `firestoned-splunk-datasource`. Apply **one** of the following — whichever matches how Grafana is deployed.
+
+**Environment variable** (Docker, systemd, Kubernetes — most setups):
+
+```
+GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource
+```
+
+Comma-separate to allow multiple:
+
+```
+GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource,firestoned-dynatrace-datasource
+```
+
+**`grafana.ini`** (deb/rpm package installs — `/etc/grafana/grafana.ini`):
+
+```ini
+[plugins]
+allow_loading_unsigned_plugins = firestoned-splunk-datasource
+```
+
+**Docker Compose**:
+
+```yaml
+services:
+  grafana:
+    image: grafana/grafana-oss:11.1.0
+    environment:
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource
+```
+
+**Kubernetes — Helm `grafana/grafana` chart** (`values.yaml`):
+
+```yaml
+env:
+  GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: firestoned-splunk-datasource
+```
+
+**systemd unit override** (running `grafana-server` directly):
+
+```bash
+sudo systemctl edit grafana-server
+```
+
+Add:
+
+```ini
+[Service]
+Environment="GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource"
+```
+
+Then `sudo systemctl daemon-reload && sudo systemctl restart grafana-server`.
+
+**Verifying it took effect** — after Grafana restarts, the log should contain a line like:
+
+```
+logger=plugin.loader level=warn msg="Permitting unsigned plugin. This is not recommended" pluginID=firestoned-splunk-datasource
+```
+
+(Default log path: `/var/log/grafana/grafana.log`.) If you don't see that line, the env var or `grafana.ini` setting isn't being read by the running process.
+
+### Step 2 — Install the plugin zip
+
+Three methods. Pick whichever matches your environment.
+
+#### Manual install (any Grafana, including Docker)
 
 Unzip into Grafana's plugins directory and restart:
 
@@ -178,30 +245,20 @@ unzip firestoned-splunk-datasource-<version>.zip -d /var/lib/grafana/plugins/
 systemctl restart grafana-server
 ```
 
-The default plugin path on Linux packages is `/var/lib/grafana/plugins`. On Homebrew it's `/opt/homebrew/var/lib/grafana/plugins`. You can override with `GF_PATHS_PLUGINS`.
+Default plugin path is `/var/lib/grafana/plugins` (deb/rpm) or `/opt/homebrew/var/lib/grafana/plugins` (Homebrew). Override with `GF_PATHS_PLUGINS`.
 
-If the plugin is unsigned, allow it to load:
+#### `grafana-cli` from a URL
 
-```ini
-# grafana.ini
-[plugins]
-allow_loading_unsigned_plugins = firestoned-splunk-datasource
-```
-
-…or via env: `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource`.
-
-### 2. `grafana-cli` from a URL
-
-Host the zip somewhere reachable (GitHub Releases, S3, internal mirror) and:
+Host the zip somewhere reachable (GitHub Releases, S3, internal mirror):
 
 ```bash
 grafana-cli --pluginUrl https://example.com/firestoned-splunk-datasource-<version>.zip \
   plugins install firestoned-splunk-datasource
 ```
 
-### 3. Grafana Docker image (`GF_INSTALL_PLUGINS`)
+#### Grafana Docker image (`GF_INSTALL_PLUGINS`)
 
-The official `grafana/grafana` image installs plugins on startup from `GF_INSTALL_PLUGINS`. Use the `url;id` form for a custom zip:
+The official `grafana/grafana` image installs plugins on startup from `GF_INSTALL_PLUGINS` — use the `url;id` form for a custom zip, paired with the allowlist env var from Step 1:
 
 ```yaml
 environment:

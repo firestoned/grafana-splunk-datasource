@@ -213,110 +213,23 @@ jobs:
           retention-days: ${{ github.event_name == 'release' && 90 || 14 }}
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Sign plugin — release only. Uses @grafana/sign-plugin which calls the
-  # Grafana plugin signing service. Requires a Grafana Cloud access policy
-  # token in the GRAFANA_ACCESS_POLICY_TOKEN secret. The signature
-  # (MANIFEST.txt) is written into the dist/ tree, so we re-zip after.
-  # ─────────────────────────────────────────────────────────────────────────────
-  sign-plugin:
-    name: ✍️ Sign Plugin
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    needs: [extract-version, package]
-    outputs:
-      zip_name: ${{ steps.rezip.outputs.zip_name }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-
-      - name: Download frontend dist
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist/
-
-      - name: Download backend binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-binaries
-          path: dist/
-
-      - name: Restore executable bits on Go binaries
-        run: chmod +x dist/gpx_* || true
-
-      - name: Sign plugin
-        env:
-          GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
-        run: npx --yes @grafana/sign-plugin@latest
-
-      - name: Re-zip signed plugin
-        id: rezip
-        env:
-          VERSION: ${{ needs.extract-version.outputs.version }}
-        run: |
-          set -euo pipefail
-          rm -rf .pkg
-          mkdir -p .pkg/${PLUGIN_ID}
-          cp -R dist/. .pkg/${PLUGIN_ID}/
-          zip_name="${PLUGIN_ID}-${VERSION}.zip"
-          (cd .pkg && zip -rq "../${zip_name}" "${PLUGIN_ID}")
-          sha256sum "${zip_name}" | tee "${zip_name}.sha256"
-          echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload signed plugin zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugin-zip-signed
-          path: |
-            ${{ steps.rezip.outputs.zip_name }}
-            ${{ steps.rezip.outputs.zip_name }}.sha256
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # GitHub Artifact Attestation — release only. Emits SLSA build provenance
-  # for the signed plugin zip.
-  # ─────────────────────────────────────────────────────────────────────────────
-  attest:
-    name: 🔏 Attest Plugin Provenance
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    needs: [sign-plugin]
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
-    steps:
-      - name: Download signed plugin
-        uses: actions/download-artifact@v4
-        with:
-          name: plugin-zip-signed
-          path: ./signed
-
-      - name: Attest plugin zip provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: signed/${{ needs.sign-plugin.outputs.zip_name }}
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Release assets — release only. Uploads signed zip + checksum to the
-  # GitHub Release.
+  # Release assets — release only. Uploads the unsigned plugin zip + checksum
+  # to the GitHub Release. This is an OSS / on-prem-only plugin, so we don't
+  # use Grafana's signing service. Operators must allow loading the unsigned
+  # plugin via GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=<plugin-id>.
   # ─────────────────────────────────────────────────────────────────────────────
   upload-release-assets:
     name: 🚀 Upload Release Assets
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
-    needs: [sign-plugin, attest]
+    needs: [package]
     permissions:
       contents: write
     steps:
-      - name: Download signed plugin
+      - name: Download plugin zip
         uses: actions/download-artifact@v4
         with:
-          name: plugin-zip-signed
+          name: plugin-zip
           path: ./release
 
       - name: Upload release assets
