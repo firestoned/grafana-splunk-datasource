@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "Splunk",
+  "id": "firestoned-splunk-datasource",
+  "category": "logging",
+  "metrics": false,
+  "logs": true,
+  "backend": true,
+  "executable": "gpx_splunk",
+  "info": {
+    "description": "Grafana data source for Splunk — pull logs via the Splunk REST API",
+    "author": {
+      "name": "firestoned"
+    },
+    "keywords": ["datasource", "splunk", "logs", "logging", "siem"],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [
+      {
+        "name": "GitHub",
+        "url": "https://github.com/firestoned/grafana-splunk-datasource"
+      },
+      {
+        "name": "License",
+        "url": "https://github.com/firestoned/grafana-splunk-datasource/blob/main/LICENSE"
+      }
+    ],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.4.0",
+    "plugins": []
+  }
+}

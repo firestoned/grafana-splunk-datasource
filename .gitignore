@@ -1,0 +1,38 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+coverage/
+
+# Build output
+dist/
+build/
+
+# Go
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+
+# Test
+/cypress/screenshots
+/cypress/videos
+/playwright-report
+/test-results
+
+# Generated
+src/img/screenshots/
+*.zip

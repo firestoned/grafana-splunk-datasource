@@ -1,0 +1,17 @@
+# Auto-provisioned data source for local dev.
+# Set SPLUNK_URL and SPLUNK_TOKEN before `docker compose up` to auto-configure
+# the data source. Otherwise just create it from the UI at http://localhost:3000.
+
+apiVersion: 1
+
+datasources:
+  - name: Splunk
+    type: firestoned-splunk-datasource
+    access: proxy
+    isDefault: true
+    editable: true
+    jsonData:
+      url: ${SPLUNK_URL}
+      tlsSkipVerify: false
+    secureJsonData:
+      authToken: ${SPLUNK_TOKEN}
