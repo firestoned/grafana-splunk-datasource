@@ -152,13 +152,64 @@ go test ./...     # backend unit tests against an httptest fake Splunk
 
 ## Building a release artifact
 
+Grafana plugins are distributed as a zip of the built `dist/` directory, named after the plugin id. Build, optionally sign, then package:
+
 ```bash
-npm run build
-mage -v buildAll
+npm run build           # frontend → dist/
+mage -v buildAll        # backend  → dist/gpx_splunk_*
 # Optional: sign so it can be loaded without
 # GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS
 npm run sign
+npm run package         # → firestoned-splunk-datasource-<version>.zip
 ```
+
+The zip contains a single top-level directory `firestoned-splunk-datasource/` — the layout Grafana expects under its plugins directory.
+
+## Installing the plugin
+
+Three supported methods. Pick whichever matches your environment.
+
+### 1. Manual install (any Grafana, including Docker)
+
+Unzip into Grafana's plugins directory and restart:
+
+```bash
+unzip firestoned-splunk-datasource-<version>.zip -d /var/lib/grafana/plugins/
+systemctl restart grafana-server
+```
+
+The default plugin path on Linux packages is `/var/lib/grafana/plugins`. On Homebrew it's `/opt/homebrew/var/lib/grafana/plugins`. You can override with `GF_PATHS_PLUGINS`.
+
+If the plugin is unsigned, allow it to load:
+
+```ini
+# grafana.ini
+[plugins]
+allow_loading_unsigned_plugins = firestoned-splunk-datasource
+```
+
+…or via env: `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource`.
+
+### 2. `grafana-cli` from a URL
+
+Host the zip somewhere reachable (GitHub Releases, S3, internal mirror) and:
+
+```bash
+grafana-cli --pluginUrl https://example.com/firestoned-splunk-datasource-<version>.zip \
+  plugins install firestoned-splunk-datasource
+```
+
+### 3. Grafana Docker image (`GF_INSTALL_PLUGINS`)
+
+The official `grafana/grafana` image installs plugins on startup from `GF_INSTALL_PLUGINS`. Use the `url;id` form for a custom zip:
+
+```yaml
+environment:
+  - GF_INSTALL_PLUGINS=https://example.com/firestoned-splunk-datasource-<version>.zip;firestoned-splunk-datasource
+  - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource
+```
+
+After install, restart Grafana and confirm the plugin appears under **Administration → Plugins**.
 
 ## Roadmap
 

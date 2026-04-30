@@ -1,0 +1,324 @@
+name: Build
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'pkg/**'
+      - 'provisioning/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.config/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Magefile.go'
+      - '.github/workflows/build.yaml'
+  push:
+    branches:
+      - main
+  release:
+    types:
+      - published
+
+# Top-level token is read-only. Jobs that need elevated scopes
+# (id-token:write for keyless signing, contents:write for release asset
+# upload, attestations:write for build provenance) declare them at the
+# job level.
+permissions:
+  contents: read
+
+env:
+  PLUGIN_ID: firestoned-splunk-datasource
+  GO_VERSION: '1.22'
+  MAGE_VERSION: v1.15.0
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Extract version — all events; downstream jobs depend on this.
+  # PR  → 0.0.0-pr.<num>
+  # push → 0.0.0-main.<short-sha>
+  # release → release tag (with leading "v" stripped)
+  # ─────────────────────────────────────────────────────────────────────────────
+  extract-version:
+    name: 🏷️ Extract Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag_name: ${{ steps.v.outputs.tag_name }}
+      short_sha: ${{ steps.v.outputs.short_sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: v
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short HEAD)"
+          case "${{ github.event_name }}" in
+            pull_request)
+              version="0.0.0-pr.${{ github.event.pull_request.number }}"
+              tag_name=""
+              ;;
+            push)
+              version="0.0.0-main.${short_sha}"
+              tag_name=""
+              ;;
+            release)
+              tag_name="${{ github.event.release.tag_name }}"
+              version="${tag_name#v}"
+              ;;
+          esac
+          echo "version=${version}"     >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_name}"   >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Frontend — lint, typecheck, test, build → dist/.
+  # ─────────────────────────────────────────────────────────────────────────────
+  frontend:
+    name: 🎨 Frontend
+    runs-on: ubuntu-latest
+    needs: [extract-version]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bump package.json version (release)
+        if: github.event_name == 'release'
+        run: npm version --no-git-tag-version "${{ needs.extract-version.outputs.version }}"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test:ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: ${{ github.event_name == 'release' && 90 || 7 }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Backend — Go test (race + coverage) and mage buildAll → dist/gpx_*.
+  # ─────────────────────────────────────────────────────────────────────────────
+  backend:
+    name: 🦫 Backend
+    runs-on: ubuntu-latest
+    needs: [extract-version]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./pkg/...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.out
+          retention-days: 7
+
+      - name: Install Mage
+        run: go install github.com/magefile/mage@${{ env.MAGE_VERSION }}
+
+      - name: Build backend
+        run: mage -v buildAll
+
+      - name: Upload backend binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binaries
+          path: dist/gpx_*
+          retention-days: ${{ github.event_name == 'release' && 90 || 7 }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Package — push to main + release. Combines frontend + backend artifacts
+  # into the canonical Grafana plugin zip layout (single top-level dir
+  # named after PLUGIN_ID).
+  # ─────────────────────────────────────────────────────────────────────────────
+  package:
+    name: 📦 Package Plugin Zip
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [extract-version, frontend, backend]
+    outputs:
+      zip_name: ${{ steps.zip.outputs.zip_name }}
+    steps:
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
+      - name: Download backend binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binaries
+          path: dist/
+
+      - name: Restore executable bits on Go binaries
+        run: chmod +x dist/gpx_* || true
+
+      - name: Build plugin zip
+        id: zip
+        env:
+          VERSION: ${{ needs.extract-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p .pkg/${PLUGIN_ID}
+          cp -R dist/. .pkg/${PLUGIN_ID}/
+          zip_name="${PLUGIN_ID}-${VERSION}.zip"
+          (cd .pkg && zip -rq "../${zip_name}" "${PLUGIN_ID}")
+          sha256sum "${zip_name}" | tee "${zip_name}.sha256"
+          echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload plugin zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-zip
+          path: |
+            ${{ steps.zip.outputs.zip_name }}
+            ${{ steps.zip.outputs.zip_name }}.sha256
+          retention-days: ${{ github.event_name == 'release' && 90 || 14 }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Sign plugin — release only. Uses @grafana/sign-plugin which calls the
+  # Grafana plugin signing service. Requires a Grafana Cloud access policy
+  # token in the GRAFANA_ACCESS_POLICY_TOKEN secret. The signature
+  # (MANIFEST.txt) is written into the dist/ tree, so we re-zip after.
+  # ─────────────────────────────────────────────────────────────────────────────
+  sign-plugin:
+    name: ✍️ Sign Plugin
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: [extract-version, package]
+    outputs:
+      zip_name: ${{ steps.rezip.outputs.zip_name }}
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
+      - name: Download backend binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binaries
+          path: dist/
+
+      - name: Restore executable bits on Go binaries
+        run: chmod +x dist/gpx_* || true
+
+      - name: Sign plugin
+        env:
+          GRAFANA_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+        run: npx --yes @grafana/sign-plugin@latest
+
+      - name: Re-zip signed plugin
+        id: rezip
+        env:
+          VERSION: ${{ needs.extract-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf .pkg
+          mkdir -p .pkg/${PLUGIN_ID}
+          cp -R dist/. .pkg/${PLUGIN_ID}/
+          zip_name="${PLUGIN_ID}-${VERSION}.zip"
+          (cd .pkg && zip -rq "../${zip_name}" "${PLUGIN_ID}")
+          sha256sum "${zip_name}" | tee "${zip_name}.sha256"
+          echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed plugin zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-zip-signed
+          path: |
+            ${{ steps.rezip.outputs.zip_name }}
+            ${{ steps.rezip.outputs.zip_name }}.sha256
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GitHub Artifact Attestation — release only. Emits SLSA build provenance
+  # for the signed plugin zip.
+  # ─────────────────────────────────────────────────────────────────────────────
+  attest:
+    name: 🔏 Attest Plugin Provenance
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: [sign-plugin]
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - name: Download signed plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-zip-signed
+          path: ./signed
+
+      - name: Attest plugin zip provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: signed/${{ needs.sign-plugin.outputs.zip_name }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Release assets — release only. Uploads signed zip + checksum to the
+  # GitHub Release.
+  # ─────────────────────────────────────────────────────────────────────────────
+  upload-release-assets:
+    name: 🚀 Upload Release Assets
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: [sign-plugin, attest]
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-zip-signed
+          path: ./release
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.zip
+            release/*.sha256
