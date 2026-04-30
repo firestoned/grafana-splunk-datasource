@@ -3,18 +3,19 @@ package plugin
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/httpclient"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
@@ -35,14 +36,14 @@ type Datasource struct {
 }
 
 // settings is the shape of the non-secret JSON sent by the frontend
-// ConfigEditor. Field names must match `src/types.ts:SplunkDataSourceOptions`.
+// ConfigEditor. tlsSkipVerify lives in jsonData too but is read by the SDK
+// httpclient automatically (standard Grafana datasource TLS handling).
 type settings struct {
-	URL           string `json:"url"`
-	TLSSkipVerify bool   `json:"tlsSkipVerify"`
+	URL string `json:"url"`
 }
 
 // NewDatasource is the factory called by the SDK on instance create / update.
-func NewDatasource(_ context.Context, s backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+func NewDatasource(ctx context.Context, s backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
 	var cfg settings
 	if err := json.Unmarshal(s.JSONData, &cfg); err != nil {
 		return nil, fmt.Errorf("invalid jsonData: %w", err)
@@ -51,24 +52,32 @@ func NewDatasource(_ context.Context, s backend.DataSourceInstanceSettings) (ins
 		return nil, errors.New("url is required")
 	}
 
-	token := s.DecryptedSecureJSONData["authToken"]
-
-	transport := &http.Transport{
-		// Splunk Cloud has valid certs; skip is for on-prem self-signed only.
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify}, //nolint:gosec
+	opts, err := s.HTTPClientOptions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("http client options: %w", err)
+	}
+	// Searches can be slow; raise the default if the user hasn't configured one.
+	if opts.Timeouts != nil && opts.Timeouts.Timeout < 60*time.Second {
+		opts.Timeouts.Timeout = 60 * time.Second
 	}
 
+	client, err := httpclient.New(opts)
+	if err != nil {
+		return nil, fmt.Errorf("http client: %w", err)
+	}
+
+	token := s.DecryptedSecureJSONData["authToken"]
+
 	return &Datasource{
-		baseURL:   strings.TrimRight(cfg.URL, "/"),
-		authToken: token,
-		httpClient: &http.Client{
-			Timeout:   60 * time.Second, // searches can be slow
-			Transport: transport,
-		},
+		baseURL:    strings.TrimRight(cfg.URL, "/"),
+		authToken:  token,
+		httpClient: client,
 	}, nil
 }
 
-func (d *Datasource) Dispose() {}
+func (d *Datasource) Dispose() {
+	d.httpClient.CloseIdleConnections()
+}
 
 // queryModel matches the frontend SplunkQuery type.
 type queryModel struct {
@@ -160,15 +169,19 @@ type exportLine struct {
 	// LastRow / Messages also exist; ignored here.
 }
 
+// parseExportStream reads JSONL events and builds a Grafana logs frame.
+// Field columns are derived from the union of keys across all events, so
+// SPL queries that emit arbitrary fields (e.g. `| stats count by status`)
+// keep their columns instead of being silently dropped.
 func parseExportStream(r io.Reader) (*data.Frame, error) {
-	var (
-		times       []time.Time
-		bodies      []string
-		hosts       []string
-		sources     []string
-		sourcetypes []string
-		indexes     []string
-	)
+	type event struct {
+		t    time.Time
+		raw  string
+		kv   map[string]string
+	}
+
+	var events []event
+	fieldSet := map[string]struct{}{}
 
 	scanner := bufio.NewScanner(r)
 	// Splunk lines can be large; bump the buffer.
@@ -189,28 +202,66 @@ func parseExportStream(r io.Reader) (*data.Frame, error) {
 			continue
 		}
 
-		ts := parseSplunkTime(rawString(ev.Result["_time"]))
-		raw := rawString(ev.Result["_raw"])
-
-		times = append(times, ts)
-		bodies = append(bodies, raw)
-		hosts = append(hosts, rawString(ev.Result["host"]))
-		sources = append(sources, rawString(ev.Result["source"]))
-		sourcetypes = append(sourcetypes, rawString(ev.Result["sourcetype"]))
-		indexes = append(indexes, rawString(ev.Result["index"]))
+		e := event{
+			t:   parseSplunkTime(rawString(ev.Result["_time"])),
+			raw: rawString(ev.Result["_raw"]),
+			kv:  make(map[string]string, len(ev.Result)),
+		}
+		for k, v := range ev.Result {
+			if k == "_time" || k == "_raw" {
+				continue
+			}
+			e.kv[k] = rawString(v)
+			fieldSet[k] = struct{}{}
+		}
+		events = append(events, e)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read stream: %w", err)
 	}
 
-	frame := data.NewFrame("logs",
+	times := make([]time.Time, len(events))
+	bodies := make([]string, len(events))
+	for i, e := range events {
+		times[i] = e.t
+		bodies[i] = e.raw
+	}
+
+	// Order columns: well-known meta first (host/source/sourcetype/index),
+	// then any remaining fields sorted alphabetically. Stable order keeps
+	// dashboards from reflowing on each refresh.
+	knownMeta := []string{"host", "source", "sourcetype", "index"}
+	seen := map[string]bool{}
+	fieldOrder := make([]string, 0, len(fieldSet))
+	for _, k := range knownMeta {
+		if _, ok := fieldSet[k]; ok {
+			fieldOrder = append(fieldOrder, k)
+			seen[k] = true
+		}
+	}
+	rest := make([]string, 0, len(fieldSet))
+	for k := range fieldSet {
+		if !seen[k] {
+			rest = append(rest, k)
+		}
+	}
+	sort.Strings(rest)
+	fieldOrder = append(fieldOrder, rest...)
+
+	fields := make([]*data.Field, 0, 2+len(fieldOrder))
+	fields = append(fields,
 		data.NewField("timestamp", nil, times),
 		data.NewField("body", nil, bodies),
-		data.NewField("host", nil, hosts),
-		data.NewField("source", nil, sources),
-		data.NewField("sourcetype", nil, sourcetypes),
-		data.NewField("index", nil, indexes),
 	)
+	for _, name := range fieldOrder {
+		col := make([]string, len(events))
+		for i, e := range events {
+			col[i] = e.kv[name]
+		}
+		fields = append(fields, data.NewField(name, nil, col))
+	}
+
+	frame := data.NewFrame("logs", fields...)
 	frame.Meta = &data.FrameMeta{
 		Type:                   data.FrameTypeLogLines,
 		PreferredVisualization: data.VisTypeLogs,

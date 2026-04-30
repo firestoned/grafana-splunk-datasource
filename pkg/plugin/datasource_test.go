@@ -89,7 +89,7 @@ func TestQueryData_Success(t *testing.T) {
 		t.Errorf("expected logs frame meta, got %+v", frame.Meta)
 	}
 	// Spot-check body
-	_, bodyField := frame.FieldByName("body")
+	bodyField, _ := frame.FieldByName("body")
 	if bodyField == nil {
 		t.Fatal("missing body field")
 	}
