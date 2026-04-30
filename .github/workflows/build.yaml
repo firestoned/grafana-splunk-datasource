@@ -98,7 +98,7 @@ jobs:
 
       - name: Bump package.json version (release)
         if: github.event_name == 'release'
-        run: npm version --no-git-tag-version "${{ needs.extract-version.outputs.version }}"
+        run: npm version --no-git-tag-version --allow-same-version "${{ needs.extract-version.outputs.version }}"
 
       - name: Typecheck
         run: npm run typecheck
