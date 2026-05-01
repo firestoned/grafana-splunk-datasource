@@ -12,6 +12,5 @@ datasources:
     editable: true
     jsonData:
       url: ${SPLUNK_URL}
-      tlsSkipVerify: false
     secureJsonData:
       authToken: ${SPLUNK_TOKEN}

@@ -36,8 +36,7 @@ type Datasource struct {
 }
 
 // settings is the shape of the non-secret JSON sent by the frontend
-// ConfigEditor. tlsSkipVerify lives in jsonData too but is read by the SDK
-// httpclient automatically (standard Grafana datasource TLS handling).
+// ConfigEditor.
 type settings struct {
 	URL string `json:"url"`
 }

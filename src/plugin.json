@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "datasource",
   "name": "Splunk",
   "id": "firestoned-splunk-datasource",
@@ -32,6 +31,13 @@
     "version": "%VERSION%",
     "updated": "%TODAY%"
   },
+  "includes": [
+    {
+      "type": "dashboard",
+      "name": "Logs Explorer",
+      "path": "dashboards/logs-explorer.json"
+    }
+  ],
   "dependencies": {
     "grafanaDependency": ">=10.4.0",
     "plugins": []

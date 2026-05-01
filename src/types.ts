@@ -34,8 +34,6 @@ export interface SplunkDataSourceOptions extends DataSourceJsonData {
    * `https://splunk.example.com:8089`.
    */
   url: string;
-  /** Skip TLS verification (self-signed certs on dev/on-prem only). Default false. */
-  tlsSkipVerify?: boolean;
 }
 
 /**
