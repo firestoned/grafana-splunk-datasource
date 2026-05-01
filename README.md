@@ -192,9 +192,8 @@ Three methods. Pick whichever matches your environment.
 
 Download the zip from [Releases](https://github.com/firestoned/grafana-splunk-datasource/releases), unzip into Grafana's plugins directory, and restart:
 
-```bash
-unzip firestoned-splunk-datasource-<version>.zip -d /var/lib/grafana/plugins/
-systemctl restart grafana-server
+```
+GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=firestoned-splunk-datasource
 ```
 
 Default plugin path is `/var/lib/grafana/plugins` (deb/rpm) or `/opt/homebrew/var/lib/grafana/plugins` (Homebrew). Override with `GF_PATHS_PLUGINS`.

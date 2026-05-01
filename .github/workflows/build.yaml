@@ -320,14 +320,14 @@ jobs:
     name: 🚀 Upload Release Assets
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
-    needs: [sign-plugin, attest]
+    needs: [package]
     permissions:
       contents: write
     steps:
-      - name: Download signed plugin
+      - name: Download plugin zip
         uses: actions/download-artifact@v4
         with:
-          name: plugin-zip-signed
+          name: plugin-zip
           path: ./release
 
       - name: Upload release assets
