@@ -1,5 +1,5 @@
 import React, { ChangeEvent } from 'react';
-import { InlineField, Input, SecretInput, InlineSwitch } from '@grafana/ui';
+import { InlineField, Input, SecretInput } from '@grafana/ui';
 import { DataSourcePluginOptionsEditorProps } from '@grafana/data';
 
 import { SplunkDataSourceOptions, SplunkSecureJsonData } from '../types';
@@ -14,13 +14,6 @@ export function ConfigEditor(props: Props) {
     onOptionsChange({
       ...options,
       jsonData: { ...jsonData, url: e.target.value },
-    });
-  };
-
-  const onTlsSkipChange = (e: React.FormEvent<HTMLInputElement>) => {
-    onOptionsChange({
-      ...options,
-      jsonData: { ...jsonData, tlsSkipVerify: e.currentTarget.checked },
     });
   };
 
@@ -66,13 +59,6 @@ export function ConfigEditor(props: Props) {
           onChange={onTokenChange}
           onReset={onTokenReset}
         />
-      </InlineField>
-      <InlineField
-        label="Skip TLS Verify"
-        labelWidth={20}
-        tooltip="Only enable for dev / self-signed certs. Leave OFF for Splunk Cloud."
-      >
-        <InlineSwitch value={Boolean(jsonData.tlsSkipVerify)} onChange={onTlsSkipChange} />
       </InlineField>
     </>
   );

@@ -25,27 +25,37 @@ Early. Supports synchronous SPL searches via `services/search/jobs/export` and r
 
 ## Quickstart (local dev)
 
+The `Makefile` wraps the full build + run cycle against a local Grafana OSS Docker container. You need Docker (or a compatible runtime), Node ≥ 20, and Go 1.22:
+
 ```bash
 git clone https://github.com/firestoned/grafana-splunk-datasource.git
 cd grafana-splunk-datasource
 
-# Frontend
-npm install
-npm run build           # one-shot build into ./dist
-# or: npm run dev       # watch mode
-
-# Backend
-go mod download
-go install github.com/magefile/mage@v1.15.0
-mage -v buildAll        # builds gpx_splunk binaries into ./dist
-
-# Run Grafana with the plugin mounted
 export SPLUNK_URL="https://abc.splunkcloud.com:8089"
 export SPLUNK_TOKEN="eyJraWQiOiJzcGx1bmsuc2VjcmV0..."
-docker compose up
+
+make dev                # build frontend + backend, start Grafana OSS in Docker
 ```
 
-Open http://localhost:3000, log in as `admin` / `admin`. The Splunk data source is auto-provisioned from the env vars. You can also configure it manually under **Connections → Data sources**.
+Grafana comes up at http://localhost:3000 (admin / admin). The Splunk data source is auto-provisioned from the env vars above; you can also add it manually under **Connections → Data sources → Add data source → Splunk**.
+
+### Iterating
+
+| You changed…                | Run                              | Why                                                       |
+| --------------------------- | -------------------------------- | --------------------------------------------------------- |
+| TypeScript / React          | `make build-frontend` + refresh  | Webpack rebuild → browser picks it up                     |
+| Go (`pkg/`)                 | `make dev-restart`               | Backend binary loads once at Grafana startup              |
+| `provisioning/` or env vars | `make dev-down && make dev`      | Grafana reads provisioning at startup                     |
+
+Other helpers:
+
+```bash
+make dev-logs           # tail Grafana's logs
+make dev-down           # stop and remove the container
+make test               # frontend Jest + backend `go test ./pkg/...`
+```
+
+If you'd rather drive the build steps yourself: `make build-frontend`, `make build-backend`, then `docker compose up` (the compose file is `docker-compose.yaml`).
 
 ## Project layout
 
@@ -91,7 +101,6 @@ The token never reaches the browser (it's in `secureJsonData`, encrypted at rest
 | ---------------- | --------------------------------------------------------------------------------------------- |
 | URL              | Splunk REST API base. SaaS: `https://<stack>.splunkcloud.com:8089`. On-prem: `https://<host>:8089`. |
 | Auth Token       | Splunk authentication token. Sent as `Authorization: Bearer <token>`.                         |
-| Skip TLS Verify  | Off by default. Only enable for self-signed certs in dev.                                     |
 
 **Save & Test** runs `CheckHealth`, which calls `GET /services/server/info` and reports auth failures distinctly (401, 403, network).
 
@@ -164,14 +173,55 @@ The zip contains a single top-level directory `firestoned-splunk-datasource/` �
 
 ## Installing the plugin
 
-Releases are **unsigned** — this plugin targets OSS / on-prem deployments. Grafana refuses to load unsigned plugins by default, so every install method below has two parts:
+Releases on GitHub are **signed** via Grafana's signing service. While the plugin is awaiting Grafana community-catalog approval, releases use a **private signature** — they only load on a fixed set of Grafana root URLs configured in this repo's `ROOT_URLS` variable. Operators on other URLs need to either get added to that list (and a new release cut) or use the unsigned-build path below.
 
-1. Allow the unsigned plugin to load (one-time per Grafana instance).
-2. Get the plugin zip onto disk.
+The signed zip:
 
-### Step 1 — Allow the unsigned plugin to load
+- Verifies entirely offline against a public key embedded in Grafana's binary, so it works in air-gapped environments (USB / internal mirror transfer is fine) — but only on the URLs it was signed for.
+- Does **not** require `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS` on those URLs.
 
-The plugin id is `firestoned-splunk-datasource`. Apply **one** of the following — whichever matches how Grafana is deployed.
+Once the plugin is accepted into Grafana's catalog, releases will switch to a **community signature** (no URL binding, loads anywhere) — the workflow change is one line.
+
+If you build the plugin locally, the resulting zip is unsigned and you'll need the env var below to allow it to load. See [Allowing unsigned local builds](#allowing-unsigned-local-builds).
+
+### Installing the signed release zip
+
+Three methods. Pick whichever matches your environment.
+
+#### Manual install (any Grafana, including Docker)
+
+Download the zip from [Releases](https://github.com/firestoned/grafana-splunk-datasource/releases), unzip into Grafana's plugins directory, and restart:
+
+```bash
+unzip firestoned-splunk-datasource-<version>.zip -d /var/lib/grafana/plugins/
+systemctl restart grafana-server
+```
+
+Default plugin path is `/var/lib/grafana/plugins` (deb/rpm) or `/opt/homebrew/var/lib/grafana/plugins` (Homebrew). Override with `GF_PATHS_PLUGINS`.
+
+#### `grafana-cli` from a URL
+
+Host the zip somewhere reachable (GitHub Releases, S3, internal mirror):
+
+```bash
+grafana-cli --pluginUrl https://github.com/firestoned/grafana-splunk-datasource/releases/download/v<version>/firestoned-splunk-datasource-<version>.zip \
+  plugins install firestoned-splunk-datasource
+```
+
+#### Grafana Docker image (`GF_INSTALL_PLUGINS`)
+
+The official `grafana/grafana` image installs plugins on startup from `GF_INSTALL_PLUGINS` — use the `url;id` form for a custom zip:
+
+```yaml
+environment:
+  - GF_INSTALL_PLUGINS=https://github.com/firestoned/grafana-splunk-datasource/releases/download/v<version>/firestoned-splunk-datasource-<version>.zip;firestoned-splunk-datasource
+```
+
+After install, restart Grafana and confirm the plugin appears under **Administration → Plugins**.
+
+### Allowing unsigned local builds
+
+Only relevant if you built the plugin yourself (`npm run build && mage -v buildAll && npm run package`) instead of using a GitHub release. Grafana refuses to load unsigned plugins by default; pick **one** of the patterns below to allow it.
 
 **Environment variable** (Docker, systemd, Kubernetes — most setups):
 
@@ -280,4 +330,4 @@ After install, restart Grafana and confirm the plugin appears under **Administra
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/firestoned/grafana-splunk-datasource/blob/main/LICENSE).

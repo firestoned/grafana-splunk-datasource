@@ -1,9 +1,5 @@
+// Delegate to the scaffolded jest config in .config/, which uses @swc/jest,
+// allows ESM-only deps (d3, rxjs, etc.) through, and mocks react-inlinesvg.
 module.exports = {
-  preset: 'ts-jest',
-  testEnvironment: 'jsdom',
-  moduleDirectories: ['node_modules', 'src'],
-  setupFilesAfterEnv: ['<rootDir>/jest-setup.js'],
-  moduleNameMapper: {
-    '\\.(svg|png|jpg|jpeg|gif)$': '<rootDir>/__mocks__/fileMock.js',
-  },
+  ...require('./.config/jest.config'),
 };

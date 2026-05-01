@@ -1,0 +1,126 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Splunk log exploration: recent log lines on top, error count over time on the bottom. Customize the SPL via the $spl variable.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "firestoned-splunk-datasource", "uid": "${DS_SPLUNK}" },
+      "description": "Most recent matching log lines. Edit the $spl variable to change the search.",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "firestoned-splunk-datasource", "uid": "${DS_SPLUNK}" },
+          "search": "$spl",
+          "maxResults": 500,
+          "refId": "A"
+        }
+      ],
+      "title": "Recent logs",
+      "type": "logs"
+    },
+    {
+      "datasource": { "type": "firestoned-splunk-datasource", "uid": "${DS_SPLUNK}" },
+      "description": "Count of matching log lines per minute. Useful for spotting bursts of errors.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "firestoned-splunk-datasource", "uid": "${DS_SPLUNK}" },
+          "search": "$spl | timechart span=1m count",
+          "maxResults": 0,
+          "refId": "A"
+        }
+      ],
+      "title": "Event volume (per minute)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["splunk", "logs"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Splunk", "value": "Splunk" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Splunk",
+        "multi": false,
+        "name": "DS_SPLUNK",
+        "options": [],
+        "query": "firestoned-splunk-datasource",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": { "selected": false, "text": "index=main", "value": "index=main" },
+        "description": "SPL search. The leading `search` is implicit. Examples:  index=main level=ERROR  •  index=auth action=failure  •  index=app sourcetype=app:json | search status>=500",
+        "hide": 0,
+        "label": "SPL",
+        "name": "spl",
+        "options": [{ "selected": true, "text": "index=main", "value": "index=main" }],
+        "query": "index=main",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Splunk — Logs Explorer",
+  "uid": "firestoned-splunk-logs-explorer",
+  "version": 1,
+  "weekStart": ""
+}
